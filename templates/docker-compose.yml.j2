@@ -23,8 +23,6 @@ services:
       - {{ log_volume }}:/app/logs
     expose:
       - "{{ service_port }}"
-    # Security hardening — drop all Linux capabilities
-    # then add back only what the app needs
     cap_drop:
       - ALL
     cap_add:
@@ -49,13 +47,37 @@ services:
     networks:
       - {{ network_name }}
     volumes:
-      # Generated nginx config — read only so nothing inside can modify it
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      # SSL certificates — mounted from host certs/ folder
       - ./certs/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
       - ./certs/privkey.pem:/etc/nginx/certs/privkey.pem:ro
-      # Nginx logs volume — persists across container restarts
       - {{ log_volume }}:/var/log/nginx
     depends_on:
       app:
         condition: service_healthy
+
+  opa:
+    image: openpolicyagent/opa:latest-rootless
+    container_name: swiftdeploy-opa
+    restart: {{ restart_policy }}
+    # Bound to localhost only — reachable by the CLI on this host
+    # but NOT reachable from the public internet
+    # Nginx never proxies to this port — policy API stays private
+    ports:
+      - "127.0.0.1:8181:8181"
+    networks:
+      - {{ network_name }}
+    volumes:
+      # Mount the entire policies/ directory so OPA loads all .rego files
+      - ./policies:/policies:ro
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      # Load all policy files from the mounted directory
+      - "/policies"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8181/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
